@@ -13,25 +13,60 @@ GLOBAL  LINKER_PREFIX(ft_memcmp)
 
 ; $AL - return difference
 LINKER_PREFIX(ft_memcmp):
-    cld
     push    rbx
 
-    ; set rax to 0
-    xor     eax, eax
-    xor     ebx, ebx
-    ; special case for zero size
+    xor     rax, rax
+    xor     rcx, rcx
+
+; Alignment of address at $RDI for
+; using alignment mov operation for xmm registers
+.align_loop:
     test    rdx, rdx
     jz      .epilogue
-    ; $rdi and $rsi already set
-    ; move size to counter register
-    mov     rcx, rdx
-    repe    cmpsb
+    test    rdi, 0xf
+    jz      .main_loop_pre
+    movzx   rax, BYTE [rdi]
+    movzx   rbx, BYTE [rsi]
+    sub     rax, rbx
+    jne     .epilogue
+    add     rdi, 1
+    add     rsi, 1
+    sub     rdx, 1
+    jmp     .align_loop
 
-    ; after cmpsb, rdi and rsi point to the next byte after last comapred
-    mov     al, BYTE [rdi - 1]
-    mov     bl, BYTE [rsi - 1]
-    sub     eax, ebx
+.main_loop_pre:
+    xor     rbx, rbx
+.main_loop:
+    ; Checking 16 bytes by one iteration
+    movdqa  xmm0, OWORD [rdi + rcx]
+    movdqu  xmm1, OWORD [rsi + rcx]
+    pcmpeqb xmm0, xmm1
+    ; If we meet difference, one of bytes at xmm0 will be 0x00,
+    ; so we using mask of highest bits and if it is nor 0xffff
+    ; we found difference
+    pmovmskb ebx, xmm0
+    cmp     ebx, 0xffff
+    jne     .compare_diff_byte
+    add     rcx, 0x10
+    cmp     rcx, rdx
+    jb      .main_loop
 
+.epilogue_streq:
+    xor     rax, rax
 .epilogue:
     pop     rbx
     ret
+
+.compare_diff_byte:
+    not     ebx
+    bsf     ebx, ebx
+    add     rcx, rbx
+
+    ; check if differ-bytes located above the border of comparing
+    cmp     rcx, rdx 
+    jae     .epilogue_streq
+
+    movzx   rax, BYTE [rdi + rcx]
+    movzx   rbx, BYTE [rsi + rcx]
+    sub     rax, rbx
+    jmp     .epilogue
